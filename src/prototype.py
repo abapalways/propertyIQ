@@ -9,6 +9,9 @@ Given a buyer_id from data/buyer_profiles.json:
   4. Ask the LLM (with src/prompts/system_prompt.md) to produce a ranked
      shortlist with a short grounded rationale, citing listing IDs.
 
+`generate_shortlist()` is the reusable core, shared by this CLI and the Gradio
+UI (src/app.py).
+
 Run:
     python src/prototype.py            # defaults to B001 (Torres Family)
     python src/prototype.py B003
@@ -30,6 +33,11 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 CANDIDATE_K = 8
 
 
+def has_key() -> bool:
+    key = os.getenv("OPENAI_API_KEY")
+    return bool(key and "your-openai-api-key" not in key)
+
+
 def load_profile(buyer_id: str) -> dict:
     data = json.loads(PROFILES_PATH.read_text())
     for p in data["profiles"]:
@@ -47,12 +55,15 @@ def build_query(profile: dict) -> str:
     )
 
 
-def run(buyer_id: str = "B001") -> int:
-    key = os.getenv("OPENAI_API_KEY")
-    if not key or "your-openai-api-key" in key:
-        print("OPENAI_API_KEY not configured. Add it to .env, run `python src/ingest.py`, "
-              "then re-run:  python src/prototype.py " + buyer_id)
-        return 1
+def generate_shortlist(buyer_id: str, query: str | None = None) -> dict:
+    """Core RAG-to-shortlist path shared by the CLI and the Gradio UI.
+
+    Returns a dict: {buyer_id, name, prefs, rejected, query, retrieved_ids,
+    dropped, kept_ids, shortlist}. Rejection filtering is deterministic and
+    happens before the LLM call.
+    """
+    if not has_key():
+        raise RuntimeError("OPENAI_API_KEY not configured — set it in .env.")
 
     from openai import OpenAI
     from retrieve import retrieve  # same directory
@@ -60,25 +71,14 @@ def run(buyer_id: str = "B001") -> int:
     profile = load_profile(buyer_id)
     prefs = profile["preferences"]
     rejected = set(profile["session_history"]["rejected_listings"])
-    query = build_query(profile)
-
-    print(f"=== PropertyIQ prototype — buyer {buyer_id} ({profile['name']}) ===")
-    print(f"Preferences: {prefs}")
-    print(f"Rejected listings (from memory): {sorted(rejected) or 'none'}")
-    print(f"Search query: {query}\n")
+    query = query or build_query(profile)
 
     candidates = retrieve(query, k=CANDIDATE_K)
     retrieved_ids = [c["id"] for c in candidates]
-    print(f"Retrieved {len(candidates)} candidate chunks: {retrieved_ids}")
 
     # DETERMINISTIC rejection filter (code-level, before the LLM).
     kept = [c for c in candidates if c["id"] not in rejected]
     dropped = [c["id"] for c in candidates if c["id"] in rejected]
-    if dropped:
-        print(f"Rejection filter removed (never shown to LLM): {dropped}")
-    else:
-        print("Rejection filter removed: none (no rejected listing was retrieved)")
-    print(f"Candidates passed to LLM: {[c['id'] for c in kept]}\n")
 
     context = "\n\n".join(
         f"[{c['id']}] (source {c['metadata']['source']})\n{c['document']}" for c in kept
@@ -99,7 +99,7 @@ def run(buyer_id: str = "B001") -> int:
         f"list above."
     )
 
-    client = OpenAI(api_key=key)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     resp = client.chat.completions.create(
         model=MODEL,
         temperature=0,
@@ -108,24 +108,51 @@ def run(buyer_id: str = "B001") -> int:
             {"role": "user", "content": user_msg},
         ],
     )
-    shortlist = resp.choices[0].message.content
-    print("=== Ranked shortlist ===\n")
-    print(shortlist)
 
-    # Automated acceptance checks.
+    return {
+        "buyer_id": buyer_id,
+        "name": profile["name"],
+        "prefs": prefs,
+        "rejected": sorted(rejected),
+        "query": query,
+        "retrieved_ids": retrieved_ids,
+        "dropped": dropped,
+        "kept_ids": [c["id"] for c in kept],
+        "shortlist": resp.choices[0].message.content,
+    }
+
+
+def run(buyer_id: str = "B001") -> int:
+    if not has_key():
+        print("OPENAI_API_KEY not configured. Add it to .env, run `python src/ingest.py`, "
+              "then re-run:  python src/prototype.py " + buyer_id)
+        return 1
+
+    r = generate_shortlist(buyer_id)
+    print(f"=== PropertyIQ prototype — buyer {r['buyer_id']} ({r['name']}) ===")
+    print(f"Preferences: {r['prefs']}")
+    print(f"Rejected listings (from memory): {r['rejected'] or 'none'}")
+    print(f"Search query: {r['query']}\n")
+    print(f"Retrieved {len(r['retrieved_ids'])} candidate chunks: {r['retrieved_ids']}")
+    if r["dropped"]:
+        print(f"Rejection filter removed (never shown to LLM): {r['dropped']}")
+    else:
+        print("Rejection filter removed: none (no rejected listing was retrieved)")
+    print(f"Candidates passed to LLM: {r['kept_ids']}\n")
+    print("=== Ranked shortlist ===\n")
+    print(r["shortlist"])
+
     print("\n=== Acceptance checks ===")
-    kept_ids = {c["id"] for c in kept}
-    rejected_absent_from_candidates = rejected.isdisjoint(kept_ids)
-    rejected_absent_from_shortlist = all(rid not in shortlist for rid in rejected)
-    print(f"Rejected listings never passed to LLM: {rejected_absent_from_candidates} "
-          f"(rejected={sorted(rejected) or 'none'})")
-    print(f"Rejected listings absent from shortlist text: {rejected_absent_from_shortlist}")
+    rejected = set(r["rejected"])
+    print(f"Rejected listings never passed to LLM: {rejected.isdisjoint(set(r['kept_ids']))} "
+          f"(rejected={r['rejected'] or 'none'})")
+    print(f"Rejected listings absent from shortlist text: "
+          f"{all(rid not in r['shortlist'] for rid in rejected)}")
     if buyer_id == "B001":
-        elm_retrieved = "L_ELM_124" in retrieved_ids
-        print(f"  - L_ELM_124 was retrieved by similarity: {elm_retrieved}")
-        print(f"  - L_ELM_124 dropped by rejection filter: {'L_ELM_124' in dropped}")
-        print(f"  - L_ELM_124 absent from final shortlist: {'L_ELM_124' not in shortlist}")
-        print(f"  - L_PINE_101 present as a match: {'L_PINE_101' in shortlist}")
+        print(f"  - L_ELM_124 was retrieved by similarity: {'L_ELM_124' in r['retrieved_ids']}")
+        print(f"  - L_ELM_124 dropped by rejection filter: {'L_ELM_124' in r['dropped']}")
+        print(f"  - L_ELM_124 absent from final shortlist: {'L_ELM_124' not in r['shortlist']}")
+        print(f"  - L_PINE_101 present as a match: {'L_PINE_101' in r['shortlist']}")
     return 0
 
 
