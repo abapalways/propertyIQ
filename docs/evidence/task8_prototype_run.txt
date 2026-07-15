@@ -1,0 +1,39 @@
+Task 8 — Prototype Run (B001, Torres Family)
+============================================
+
+STATUS: PENDING LIVE RUN. The prototype makes an LLM call and a Chroma
+similarity search, both requiring OPENAI_API_KEY and a populated store from
+src/ingest.py. No usable key was available when the code was written ("write
+code now, run later"). This file describes the expected run; the terminal
+output should be captured here on the real run:
+
+    # with a valid OPENAI_API_KEY in .env:
+    python src/ingest.py
+    python src/prototype.py B001 | tee docs/evidence/task8_prototype_run.txt
+
+
+What the run demonstrates
+-------------------------
+For buyer B001 (David and Elena Torres): 3+ bed, <= $450K, good school
+district, Austin; rejected_listings = [L_ELM_124].
+
+1. A search query is built from B001's preferences.
+2. Candidate chunks are retrieved from ChromaDB. L_ELM_124 is a near-clone of
+   L_PINE_101, so similarity search is EXPECTED to retrieve it as a candidate.
+3. DETERMINISTIC rejection filter (in code, before the LLM): L_ELM_124 is in
+   B001's rejected list, so it is dropped from the candidate set and never
+   shown to the LLM. This is what guarantees exclusion regardless of the model.
+4. The LLM ranks the remaining candidates into a shortlist with grounded
+   rationale, and L_PINE_101 (B001's perfect match) should surface as the top
+   match.
+
+Acceptance checks printed by the prototype (expected values)
+------------------------------------------------------------
+  - L_ELM_124 was retrieved by similarity:        True   (it matches on paper)
+  - L_ELM_124 dropped by rejection filter:        True   (in B001 rejected list)
+  - L_ELM_124 absent from final shortlist:        True   (never seen by LLM)
+  - L_PINE_101 present as a match:                True   (surfaced as top match)
+
+If L_ELM_124 were NOT retrieved at all, the exclusion would be trivial; the
+design intentionally lets it be retrieved and then removes it in code, which is
+the meaningful demonstration of rejection memory.
