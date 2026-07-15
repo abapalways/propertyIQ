@@ -1,0 +1,44 @@
+Task 6 — Ingestion Log
+======================
+
+STATUS: chunking VERIFIED (real, key-free); embedding + Chroma write PENDING a
+live run with OPENAI_API_KEY. The chunk count below is real. The embedding
+count will equal the chunk count once embeddings are computed.
+
+To produce the full log, add OPENAI_API_KEY to .env and run:
+    python src/ingest.py > docs/evidence/task6_ingestion_log.txt
+
+
+--- Actual output of: python src/ingest.py --dry-run ---
+
+Corpus files: ['listings_corpus.md', 'neighborhood_data.md']
+Chunked into 16 sections (1 per listing/neighborhood):
+  - L_PINE_101  [listing]  (listings_corpus.md)
+  - L_CEDAR_103  [listing]  (listings_corpus.md)
+  - L_MAPLE_105  [listing]  (listings_corpus.md)
+  - L_OAK_106  [listing]  (listings_corpus.md)
+  - L_WALNUT_107  [listing]  (listings_corpus.md)
+  - L_PECAN_108  [listing]  (listings_corpus.md)
+  - L_WILLOW_109  [listing]  (listings_corpus.md)
+  - L_BIRCH_110  [listing]  (listings_corpus.md)
+  - L_ELM_124  [listing]  (listings_corpus.md)
+  - L_ASPEN_112  [listing]  (listings_corpus.md)
+  - pinecrest_area_78745  [neighborhood]  (neighborhood_data.md)
+  - cedar_ave_area_78704  [neighborhood]  (neighborhood_data.md)
+  - maple_rd_area_78758  [neighborhood]  (neighborhood_data.md)
+  - walnut_creek_area_78753  [neighborhood]  (neighborhood_data.md)
+  - pecan_grove_area_78746  [neighborhood]  (neighborhood_data.md)
+  - round_rock_78664  [neighborhood]  (neighborhood_data.md)
+
+[dry-run] Final chunk count: 16
+[dry-run] No embeddings computed and nothing written (use a real run to persist).
+
+
+--- Interpretation ---
+
+Final chunk count:  16  (10 listings + 6 neighborhoods)
+Embedding count:    16  (expected on live run; one embedding per chunk)
+
+Chunking is by markdown `## ` section, so each listing's full "Key Features &
+Context" stays in one chunk and no listing is split across chunks. SOURCES.md
+is intentionally excluded from indexing (it is corpus metadata, not content).
