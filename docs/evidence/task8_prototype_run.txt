@@ -1,39 +1,32 @@
-Task 8 — Prototype Run (B001, Torres Family)
-============================================
+=== PropertyIQ prototype — buyer B001 (David and Elena Torres) ===
+Model: qwen3:8b | Embeddings: nomic-embed-text
+Preferences: {'min_bedrooms': 3, 'max_budget': 450000, 'must_haves': ['good school district'], 'preferred_city': 'Austin'}
+Rejected listings (from memory): ['L_ELM_124']
+Search query: 3-bed homes under $450,000 in Austin with good school district
 
-STATUS: PENDING LIVE RUN. The prototype makes an LLM call and a Chroma
-similarity search, both requiring OPENAI_API_KEY and a populated store from
-src/ingest.py. No usable key was available when the code was written ("write
-code now, run later"). This file describes the expected run; the terminal
-output should be captured here on the real run:
+Retrieved 10 candidate chunks: ['L_PINE_101', 'L_CEDAR_103', 'L_ASPEN_112', 'L_WALNUT_107', 'L_BIRCH_110', 'L_OAK_106', 'L_WILLOW_109', 'L_PECAN_108', 'L_MAPLE_105', 'L_ELM_124']
+Rejection filter removed (never shown to LLM): ['L_ELM_124']
+Candidates passed to LLM: ['L_PINE_101', 'L_CEDAR_103', 'L_ASPEN_112', 'L_WALNUT_107', 'L_BIRCH_110', 'L_OAK_106', 'L_WILLOW_109', 'L_PECAN_108', 'L_MAPLE_105']
 
-    # with a valid OPENAI_API_KEY in .env:
-    python src/ingest.py
-    python src/prototype.py B001 | tee docs/evidence/task8_prototype_run.txt
+=== Ranked shortlist ===
 
+Here’s the ranked shortlist for David and Elena Torres, based on their criteria (3 bedrooms, under $450K, good schools in Austin):
 
-What the run demonstrates
--------------------------
-For buyer B001 (David and Elena Torres): 3+ bed, <= $450K, good school
-district, Austin; rejected_listings = [L_ELM_124].
+1. **L_PINE_101** – Perfect match: 3 bedrooms, under $450K, no HOA, 2-car garage, and highly-rated Austin ISD schools (8–9/10).  
+2. **L_OAK_106** – Strong secondary option in the same Pinecrest area as L_PINE_101, with good schools (8/10), 2-car garage, and just $9K over the price of L_PINE_101.  
+3. **L_PECAN_108** – Close to budget ($445K), 3 bedrooms, 2-car garage, and top-rated Eanes ISD schools (9–10/10), but includes a $350/month HOA fee, which may impact affordability.  
 
-1. A search query is built from B001's preferences.
-2. Candidate chunks are retrieved from ChromaDB. L_ELM_124 is a near-clone of
-   L_PINE_101, so similarity search is EXPECTED to retrieve it as a candidate.
-3. DETERMINISTIC rejection filter (in code, before the LLM): L_ELM_124 is in
-   B001's rejected list, so it is dropped from the candidate set and never
-   shown to the LLM. This is what guarantees exclusion regardless of the model.
-4. The LLM ranks the remaining candidates into a shortlist with grounded
-   rationale, and L_PINE_101 (B001's perfect match) should surface as the top
-   match.
+**Excluded or flagged listings:**  
+- **L_CEDAR_103** – Over budget ($510K), exceeds the $450K ceiling.  
+- **L_ASPEN_112** – 4 bedrooms, which is more than needed, but priced at $498K — over B001’s $450K budget.  
+- **L_WALNUT_107** – 4 bedrooms and under budget, but assigned schools are rated 4–5/10, which doesn’t meet the “good school district” requirement.  
+- **L_WILLOW_109** – Great on paper, but located in Round Rock, not Austin, so it fails the city preference.  
+- **L_MAPLE_105** – Under budget and in Austin, but lacks a garage, which is a must-have for B002 and B003.
 
-Acceptance checks printed by the prototype (expected values)
-------------------------------------------------------------
-  - L_ELM_124 was retrieved by similarity:        True   (it matches on paper)
-  - L_ELM_124 dropped by rejection filter:        True   (in B001 rejected list)
-  - L_ELM_124 absent from final shortlist:        True   (never seen by LLM)
-  - L_PINE_101 present as a match:                True   (surfaced as top match)
-
-If L_ELM_124 were NOT retrieved at all, the exclusion would be trivial; the
-design intentionally lets it be retrieved and then removes it in code, which is
-the meaningful demonstration of rejection memory.
+=== Acceptance checks ===
+Rejected listings never passed to LLM: True (rejected=['L_ELM_124'])
+Rejected listings absent from shortlist text: True
+  - L_ELM_124 was retrieved by similarity: True
+  - L_ELM_124 dropped by rejection filter: True
+  - L_ELM_124 absent from final shortlist: True
+  - L_PINE_101 present as a match: True

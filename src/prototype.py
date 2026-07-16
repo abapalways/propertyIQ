@@ -1,4 +1,4 @@
-"""Task 8: minimal criteria-to-shortlist prototype (no mortgage/comps tools yet).
+"""Task 8: minimal criteria-to-shortlist prototype (Ollama / qwen3:8b, no tools yet).
 
 Given a buyer_id from data/buyer_profiles.json:
   1. Build a search query from the buyer's preferences.
@@ -6,8 +6,8 @@ Given a buyer_id from data/buyer_profiles.json:
   3. DETERMINISTICALLY drop any listing in the buyer's rejected list BEFORE the
      LLM sees it -- rejection filtering is done in code, not left to the model,
      so a rejected listing (e.g. L_ELM_124 for B001) can never be resurfaced.
-  4. Ask the LLM (with src/prompts/system_prompt.md) to produce a ranked
-     shortlist with a short grounded rationale, citing listing IDs.
+  4. Ask ChatOllama (qwen3:8b) with src/prompts/system_prompt.md to produce a
+     ranked shortlist with a short grounded rationale, citing listing IDs.
 
 `generate_shortlist()` is the reusable core, shared by this CLI and the Gradio
 UI (src/app.py).
@@ -18,24 +18,16 @@ Run:
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llm  # noqa: E402  (shared Ollama wiring; also loads .env)
 
 ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / ".env")
-
 PROFILES_PATH = ROOT / "data" / "buyer_profiles.json"
 SYSTEM_PROMPT_PATH = ROOT / "src" / "prompts" / "system_prompt.md"
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
-CANDIDATE_K = 8
-
-
-def has_key() -> bool:
-    key = os.getenv("OPENAI_API_KEY")
-    return bool(key and "your-openai-api-key" not in key)
+CANDIDATE_K = 10
 
 
 def load_profile(buyer_id: str) -> dict:
@@ -58,14 +50,12 @@ def build_query(profile: dict) -> str:
 def generate_shortlist(buyer_id: str, query: str | None = None) -> dict:
     """Core RAG-to-shortlist path shared by the CLI and the Gradio UI.
 
-    Returns a dict: {buyer_id, name, prefs, rejected, query, retrieved_ids,
-    dropped, kept_ids, shortlist}. Rejection filtering is deterministic and
-    happens before the LLM call.
+    Returns {buyer_id, name, prefs, rejected, query, retrieved_ids, dropped,
+    kept_ids, shortlist}. Rejection filtering is deterministic and happens
+    before the LLM call.
     """
-    if not has_key():
-        raise RuntimeError("OPENAI_API_KEY not configured — set it in .env.")
+    llm.check_ollama()
 
-    from openai import OpenAI
     from retrieve import retrieve  # same directory
 
     profile = load_profile(buyer_id)
@@ -99,15 +89,11 @@ def generate_shortlist(buyer_id: str, query: str | None = None) -> dict:
         f"list above."
     )
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    resp = client.chat.completions.create(
-        model=MODEL,
-        temperature=0,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_PATH.read_text()},
-            {"role": "user", "content": user_msg},
-        ],
-    )
+    chat = llm.make_chat(temperature=0.0)
+    resp = chat.invoke([
+        ("system", SYSTEM_PROMPT_PATH.read_text()),
+        ("human", user_msg),
+    ])
 
     return {
         "buyer_id": buyer_id,
@@ -118,18 +104,20 @@ def generate_shortlist(buyer_id: str, query: str | None = None) -> dict:
         "retrieved_ids": retrieved_ids,
         "dropped": dropped,
         "kept_ids": [c["id"] for c in kept],
-        "shortlist": resp.choices[0].message.content,
+        "shortlist": resp.content.strip(),
     }
 
 
 def run(buyer_id: str = "B001") -> int:
-    if not has_key():
-        print("OPENAI_API_KEY not configured. Add it to .env, run `python src/ingest.py`, "
-              "then re-run:  python src/prototype.py " + buyer_id)
+    try:
+        llm.check_ollama()
+    except llm.OllamaUnavailable as exc:
+        print(f"ERROR: {exc}")
         return 1
 
     r = generate_shortlist(buyer_id)
     print(f"=== PropertyIQ prototype — buyer {r['buyer_id']} ({r['name']}) ===")
+    print(f"Model: {llm.OLLAMA_CHAT_MODEL} | Embeddings: {llm.OLLAMA_EMBED_MODEL}")
     print(f"Preferences: {r['prefs']}")
     print(f"Rejected listings (from memory): {r['rejected'] or 'none'}")
     print(f"Search query: {r['query']}\n")
