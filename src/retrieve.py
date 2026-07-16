@@ -1,8 +1,8 @@
-"""Task 7: retrieval over the ChromaDB corpus.
+"""Task 7: retrieval over the ChromaDB corpus (Ollama / nomic-embed-text).
 
-Embeds a query and similarity-searches the persistent Chroma store built by
-src/ingest.py, returning the top-k chunks. `retrieve()` is reused by
-src/prototype.py.
+Embeds a query with OllamaEmbeddings and similarity-searches the persistent
+Chroma store built by src/ingest.py, returning the top-k chunks. `retrieve()`
+is reused by src/prototype.py and src/app.py.
 
 Run (self-judging test on B001 Torres Family's exact query):
     python src/retrieve.py
@@ -16,49 +16,37 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llm  # noqa: E402  (shared Ollama wiring; also loads .env)
 
 ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / ".env")
-
 CHROMA_DB_DIR = os.getenv("CHROMA_DB_DIR", "chroma_db")
 COLLECTION_NAME = "propertyiq_corpus"
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
 B001_QUERY = "3-bed homes under $450K near good schools in Austin"
 
 
-def _require_key() -> str:
-    key = os.getenv("OPENAI_API_KEY")
-    if not key or "your-openai-api-key" in key:
-        raise SystemExit(
-            "OPENAI_API_KEY not configured. Add it to .env, run `python src/ingest.py`, "
-            "then re-run this script."
-        )
-    return key
-
-
-def retrieve(query: str, k: int = 3):
-    """Return the top-k corpus chunks for `query` as a list of dicts:
-    {id, document, metadata, distance}, best match first."""
-    key = _require_key()
-
+def _collection():
     import chromadb
-    from langchain_openai import OpenAIEmbeddings
-
-    embedder = OpenAIEmbeddings(model=EMBED_MODEL, api_key=key)
-    qvec = embedder.embed_query(query)
-
     db_path = str((ROOT / CHROMA_DB_DIR).resolve())
     client = chromadb.PersistentClient(path=db_path)
     try:
-        collection = client.get_collection(COLLECTION_NAME)
+        return client.get_collection(COLLECTION_NAME)
     except Exception as exc:
         raise SystemExit(
             f"Collection '{COLLECTION_NAME}' not found in {db_path}. "
             f"Run `python src/ingest.py` first. ({exc})"
         )
 
+
+def retrieve(query: str, k: int = 3):
+    """Return the top-k corpus chunks for `query` as a list of dicts:
+    {id, document, metadata, distance}, best match first."""
+    llm.check_ollama()
+    embedder = llm.make_embeddings()
+    qvec = embedder.embed_query(query)
+
+    collection = _collection()
     k = min(k, collection.count())
     res = collection.query(query_embeddings=[qvec], n_results=k)
     out = []
@@ -73,12 +61,13 @@ def retrieve(query: str, k: int = 3):
 
 
 def main() -> int:
-    _require_key()
+    try:
+        llm.check_ollama()
+    except llm.OllamaUnavailable as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
-    import chromadb
-    client = chromadb.PersistentClient(path=str((ROOT / CHROMA_DB_DIR).resolve()))
-    total = client.get_collection(COLLECTION_NAME).count()
-
+    total = _collection().count()
     # Full ranking so we can spot-check where the trap listings land.
     full = retrieve(B001_QUERY, k=total)
     ranked_ids = [r["id"] for r in full]
@@ -96,6 +85,7 @@ def main() -> int:
     willow_ok = willow_rank is None or (pine_rank is not None and willow_rank > pine_rank)
     verdict = "CORRECT" if (pine_in_top3 and cedar_ok and willow_ok) else "INCORRECT"
 
+    print(f"Embedding model: {llm.OLLAMA_EMBED_MODEL}")
     print(f"Query: {B001_QUERY}\n")
     print("Top-3 retrieved chunk IDs:", [r["id"] for r in top3])
     print(f"L_PINE_101 rank: {pine_rank} | L_CEDAR_103 rank: {cedar_rank} | "
@@ -109,18 +99,19 @@ def main() -> int:
             f"```\n{r['document']}\n```\n"
         )
 
-    md = f"""# Task 7 — Retrieval Test
+    md = f"""# Task 7 — Retrieval Test (Ollama / nomic-embed-text)
 
 **Query (B001 Torres Family's exact query):** `{B001_QUERY}`
 
 Retrieved from the persistent ChromaDB store (`{CHROMA_DB_DIR}`, collection
-`{COLLECTION_NAME}`, {total} chunks) via OpenAI embeddings (`{EMBED_MODEL}`).
+`{COLLECTION_NAME}`, {total} chunks) via OllamaEmbeddings
+(`{llm.OLLAMA_EMBED_MODEL}`).
 
 ## Top-3 retrieved chunks (full text)
 
 {chr(10).join(block(r) for r in top3)}
 
-## Spot-check ranks
+## Spot-check ranks (over the full {total}-chunk ranking)
 
 - **L_PINE_101** (B001's perfect match): rank **{pine_rank}**
 - **L_CEDAR_103** ($510K, over budget): rank **{cedar_rank}**
@@ -131,6 +122,10 @@ Retrieved from the persistent ChromaDB store (`{CHROMA_DB_DIR}`, collection
 - L_PINE_101 in top 3: **{pine_in_top3}**
 - L_CEDAR_103 does NOT rank above L_PINE_101: **{cedar_ok}**
 - L_WILLOW_109 does NOT rank above L_PINE_101: **{willow_ok}**
+
+_Embedding model note: this run uses `nomic-embed-text` (768-dim). Chunking is
+one whole section per listing (unchanged from the OpenAI-embedding setup); no
+chunking change was needed for L_PINE_101 to rank in the top 3._
 """
     evidence = ROOT / "docs" / "evidence" / "task7_retrieval_test.md"
     evidence.parent.mkdir(parents=True, exist_ok=True)
@@ -138,8 +133,9 @@ Retrieved from the persistent ChromaDB store (`{CHROMA_DB_DIR}`, collection
     print(f"\nWrote {evidence.relative_to(ROOT)}")
 
     if verdict != "CORRECT":
-        print("\nRetrieval FAILED the acceptance check. Fix chunking/embedding in "
-              "src/ingest.py before proceeding (do not move on with broken retrieval).")
+        print("\nRetrieval FAILED the acceptance check. nomic-embed-text may need a "
+              "different chunking strategy than the OpenAI setup -- iterate on "
+              "src/ingest.py chunking before proceeding.")
         return 1
     return 0
 
