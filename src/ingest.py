@@ -1,14 +1,14 @@
-"""Task 6: RAG ingestion pipeline.
+"""Task 6: RAG ingestion pipeline (Ollama / nomic-embed-text).
 
 Chunks data/corpus/*.md by markdown section (one chunk per `## ` heading), so a
 single listing's "Key Features & Context" is never split across chunks and each
 listing / neighborhood is retrieved whole and coherent. Embeds each chunk with
-OpenAI embeddings (via langchain-openai) and writes them to a persistent
-ChromaDB store at CHROMA_DB_DIR (default ./chroma_db).
+OllamaEmbeddings (nomic-embed-text via langchain-ollama) and writes them to a
+persistent ChromaDB store at CHROMA_DB_DIR (default ./chroma_db).
 
 Run:
-    python src/ingest.py            # embed + persist (needs OPENAI_API_KEY)
-    python src/ingest.py --dry-run  # chunk + report counts only, no API/no write
+    python src/ingest.py            # embed + persist (needs Ollama running)
+    python src/ingest.py --dry-run  # chunk + report counts only, no embed/write
 
 Prints the final chunk count and embedding count.
 """
@@ -19,15 +19,13 @@ import re
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llm  # noqa: E402  (shared Ollama wiring; also loads .env)
 
 ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / ".env")
-
 CORPUS_DIR = ROOT / "data" / "corpus"
 CHROMA_DB_DIR = os.getenv("CHROMA_DB_DIR", "chroma_db")
 COLLECTION_NAME = "propertyiq_corpus"
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
 # Files that are metadata about the corpus, not corpus content to index.
 SKIP_FILES = {"SOURCES.md"}
@@ -56,8 +54,7 @@ def split_sections(text: str):
 
     cleaned = []
     for s in sections:
-        # Drop trailing horizontal-rule separators / whitespace between sections.
-        s = re.sub(r"\n-{3,}\s*$", "", s).strip()
+        s = re.sub(r"\n-{3,}\s*$", "", s).strip()  # drop trailing --- separators
         if s:
             cleaned.append(s)
     return cleaned
@@ -103,29 +100,28 @@ def main() -> int:
 
     if args.dry_run:
         print(f"\n[dry-run] Final chunk count: {chunk_count}")
-        print("[dry-run] No embeddings computed and nothing written (use a real run to persist).")
+        print("[dry-run] No embeddings computed and nothing written.")
         return 0
 
-    key = os.getenv("OPENAI_API_KEY")
-    if not key or "your-openai-api-key" in key:
-        print("\nOPENAI_API_KEY not configured. Add it to .env and re-run:  python src/ingest.py")
-        print("(Or run `python src/ingest.py --dry-run` for the chunk count without embeddings.)")
+    try:
+        llm.check_ollama()
+    except llm.OllamaUnavailable as exc:
+        print(f"\nERROR: {exc}")
         return 1
 
-    import chromadb
-    from langchain_openai import OpenAIEmbeddings
-
-    print(f"\nEmbedding {chunk_count} chunks with '{EMBED_MODEL}' ...")
-    embedder = OpenAIEmbeddings(model=EMBED_MODEL, api_key=key)
+    print(f"\nEmbedding {chunk_count} chunks with '{llm.OLLAMA_EMBED_MODEL}' "
+          f"@ {llm.OLLAMA_BASE_URL} ...")
+    embedder = llm.make_embeddings()
     vectors = embedder.embed_documents(documents)
     embedding_count = len(vectors)
+    dim = len(vectors[0]) if vectors else 0
 
+    import chromadb
     db_path = str((ROOT / CHROMA_DB_DIR).resolve())
     print(f"Writing to persistent ChromaDB at {db_path} (collection '{COLLECTION_NAME}') ...")
     client = chromadb.PersistentClient(path=db_path)
-    # Rebuild the collection so re-ingesting is idempotent.
     try:
-        client.delete_collection(COLLECTION_NAME)
+        client.delete_collection(COLLECTION_NAME)  # rebuild -> idempotent re-ingest
     except Exception:
         pass
     collection = client.create_collection(COLLECTION_NAME)
@@ -133,6 +129,7 @@ def main() -> int:
 
     stored = collection.count()
     print("\n=== Ingestion complete ===")
+    print(f"Embedding model:       {llm.OLLAMA_EMBED_MODEL} (dim {dim})")
     print(f"Final chunk count:     {chunk_count}")
     print(f"Embedding count:       {embedding_count}")
     print(f"Stored in collection:  {stored}")

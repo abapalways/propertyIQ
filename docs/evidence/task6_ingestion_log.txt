@@ -1,16 +1,3 @@
-Task 6 — Ingestion Log
-======================
-
-STATUS: chunking VERIFIED (real, key-free); embedding + Chroma write PENDING a
-live run with OPENAI_API_KEY. The chunk count below is real. The embedding
-count will equal the chunk count once embeddings are computed.
-
-To produce the full log, add OPENAI_API_KEY to .env and run:
-    python src/ingest.py > docs/evidence/task6_ingestion_log.txt
-
-
---- Actual output of: python src/ingest.py --dry-run ---
-
 Corpus files: ['listings_corpus.md', 'neighborhood_data.md']
 Chunked into 16 sections (1 per listing/neighborhood):
   - L_PINE_101  [listing]  (listings_corpus.md)
@@ -30,15 +17,11 @@ Chunked into 16 sections (1 per listing/neighborhood):
   - pecan_grove_area_78746  [neighborhood]  (neighborhood_data.md)
   - round_rock_78664  [neighborhood]  (neighborhood_data.md)
 
-[dry-run] Final chunk count: 16
-[dry-run] No embeddings computed and nothing written (use a real run to persist).
+Embedding 16 chunks with 'nomic-embed-text' @ http://localhost:11434 ...
+Writing to persistent ChromaDB at /Users/avanishjoshi/Documents/propertyIQ/chroma_db (collection 'propertyiq_corpus') ...
 
-
---- Interpretation ---
-
-Final chunk count:  16  (10 listings + 6 neighborhoods)
-Embedding count:    16  (expected on live run; one embedding per chunk)
-
-Chunking is by markdown `## ` section, so each listing's full "Key Features &
-Context" stays in one chunk and no listing is split across chunks. SOURCES.md
-is intentionally excluded from indexing (it is corpus metadata, not content).
+=== Ingestion complete ===
+Embedding model:       nomic-embed-text (dim 768)
+Final chunk count:     16
+Embedding count:       16
+Stored in collection:  16
